@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>e‑Pracownik</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 12px; width: 280px; }
+    .row { margin: 8px 0; }
+    label { display: block; font-size: 12px; color: #555; }
+    input[type="time"] { width: 120px; }
+    button { padding: 6px 10px; }
+    .status { font-size: 12px; color: #333; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <button id="checkNowBtn">Check presence now</button>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="notify"> Show desktop notification</label>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" id="enableAuto"> Enable daily auto-check</label>
+    <div>
+      Time: <input type="time" id="autoTime" value="08:05" />
+    </div>
+  </div>
+  <div class="row">
+    <a href="#" id="openOptions">Open Options (set credentials)</a>
+  </div>
+  <div class="status" id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

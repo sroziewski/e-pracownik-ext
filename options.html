@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>e‑Pracownik Options</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 16px; max-width: 520px; }
+    label { display: block; margin: 10px 0 4px; }
+    input[type="text"], input[type="password"] { width: 100%; padding: 6px; }
+    .row { margin: 14px 0; }
+    .hint { font-size: 12px; color: #666; }
+    code { background: #f4f4f4; padding: 2px 4px; }
+    button { padding: 6px 10px; }
+  </style>
+</head>
+<body>
+  <h1>e‑Pracownik Extension Options</h1>
+
+  <div class="row">
+    <label for="username">Username (login/email)</label>
+    <input id="username" type="text" autocomplete="username" />
+  </div>
+
+  <div class="row">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" />
+  </div>
+
+  <div class="row">
+    <button id="save">Save</button>
+    <span id="status" class="hint"></span>
+  </div>
+
+  <p class="hint">
+    Tips:
+    <br>- Open the target page and use DevTools to confirm/adjust selectors in <code>contentScript.js</code> (marked with TODO).
+    <br>- If your org uses SSO/MFA, automatic login may not be possible. Leave credentials empty and the extension will only try to click presence after you log in manually.
+  </p>
+
+  <script src="options.js"></script>
+</body>
+</html>

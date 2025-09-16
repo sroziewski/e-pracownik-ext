@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "e-Pracownik Auto Presence",
+  "version": "1.0.0",
+  "description": "Logs in to e-Pracownik and marks today's presence if not already present.",
+  "action": {
+    "default_title": "e-Pracownik Auto Presence",
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "storage",
+    "alarms",
+    "tabs",
+    "scripting",
+    "notifications",
+    "webRequest",
+    "webRequestBlocking",
+    "cookies"
+  ],
+  "host_permissions": [
+    "https://e-pracownik.opi.org.pl/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://e-pracownik.opi.org.pl/*"],
+      "js": ["contentScript.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icon16.png",
+    "32": "icon32.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "options_page": "options.html"
+}
