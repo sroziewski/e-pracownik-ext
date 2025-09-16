@@ -223,6 +223,8 @@ Status: Cookie successfully stored and accessible via extension API`);
                 timestamp: new Date().toISOString(),
                 cookieDomain: cookie.domain,
                 verificationMethod: "chrome.cookies.get"
+              }).catch(error => {
+                console.log(`[DEBUG_LOG] Failed to send LOGIN_SUCCESS_COOKIE message to background: ${error.message}`);
               });
               
               break; // Found cookie, no need to check other URLs
@@ -296,7 +298,7 @@ Status: ${testResponse.status} - Cookie may be blocked by SameSite, domain restr
 // Track recent authentication attempts to prevent duplicates
 let lastAuthenticationAttempt = null;
 let authenticationInProgress = false;
-const AUTHENTICATION_COOLDOWN = 30000; // 30 seconds
+const AUTHENTICATION_COOLDOWN = 29 * 24 * 60 * 60 * 1000; // 29 days - matches SESSION_TOKEN 30-day validity with 1-day safety buffer
 
 async function isRecentAuthenticationValid() {
   if (!lastAuthenticationAttempt) return false;
@@ -561,6 +563,25 @@ Message: ${res.message}
 Process: Presence check workflow finished
 Timestamp: ${new Date().toISOString()}`);
       
+      // Send completion message to background script for tab cleanup
+      chrome.runtime.sendMessage({
+        type: "PRESENCE_CHECK_COMPLETE",
+        success: res.ok,
+        tabId: msg.tabId,
+        clickSessionId: msg.clickSessionId,
+        processId: msg.processId
+      }).then(() => {
+        console.log(`[DEBUG_LOG] PRESENCE_CHECK_COMPLETE message sent to background
+Success: ${res.ok}
+Tab ID: ${msg.tabId || "UNKNOWN"}
+Click Session ID: ${msg.clickSessionId || "UNKNOWN"}
+Process ID: ${msg.processId || "UNKNOWN"}
+Action: ${res.ok ? "Tab cleanup requested" : "Tab kept for debugging"}
+Timestamp: ${new Date().toISOString()}`);
+      }).catch(error => {
+        console.log(`[DEBUG_LOG] Failed to send PRESENCE_CHECK_COMPLETE message: ${error.message}`);
+      });
+      
       // Optional: show system notification
       chrome.storage.local.get(["notify"]).then(({ notify }) => {
         if (notify) {
@@ -570,6 +591,8 @@ Timestamp: ${new Date().toISOString()}`);
               title: "e-Pracownik",
               message: res.message
             }
+          }).catch(error => {
+            console.log(`[DEBUG_LOG] Failed to send SHOW_NOTIFICATION message to background: ${error.message}`);
           });
         }
       });

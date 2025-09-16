@@ -35,17 +35,75 @@ Timestamp: ${new Date().toISOString()}`);
     });
   }
 
-  const tab = await new Promise((resolve) => {
-    chrome.tabs.create({ url: TARGET_URL, active: false }, resolve);
-  });
+  // OPTIMIZATION: Check for existing tabs first before creating new ones
+  let tab;
+  let tabCreated = false;
+  let tabReused = false;
 
-  const tabId = tab.id;
-  console.log(`[DEBUG_LOG] Created new tab for presence check
-Tab ID: ${tabId}
+  try {
+    // Find existing tab with the target URL
+    const existingTabs = await chrome.tabs.query({
+      url: "https://e-pracownik.opi.org.pl/*"
+    });
+
+    if (existingTabs.length > 0) {
+      // Reuse the first existing tab
+      tab = existingTabs[0];
+      tabReused = true;
+      
+      // Update the tab URL and focus it
+      await chrome.tabs.update(tab.id, { 
+        url: TARGET_URL, 
+        active: false // Keep it in background as before
+      });
+      
+      console.log(`[DEBUG_LOG] REUSING EXISTING TAB for presence check
+Tab ID: ${tab.id}
 Tab URL: ${tab.url}
 Process ID: ${processId}
 Click Session ID: ${clickSessionId || 'AUTO_SCHEDULED'}
+Tab Management: REUSED_EXISTING_TAB
+Resource Usage: OPTIMIZED - No new tab created
 Timestamp: ${new Date().toISOString()}`);
+      
+    } else {
+      // Create new tab only if none exists
+      tab = await new Promise((resolve) => {
+        chrome.tabs.create({ url: TARGET_URL, active: false }, resolve);
+      });
+      tabCreated = true;
+      
+      console.log(`[DEBUG_LOG] CREATED NEW TAB for presence check
+Tab ID: ${tab.id}
+Tab URL: ${tab.url}
+Process ID: ${processId}
+Click Session ID: ${clickSessionId || 'AUTO_SCHEDULED'}
+Tab Management: CREATED_NEW_TAB
+Resource Usage: NEW_RESOURCE - No existing tab available
+Timestamp: ${new Date().toISOString()}`);
+    }
+
+  } catch (error) {
+    console.log(`[DEBUG_LOG] Tab management error, falling back to new tab creation: ${error.message}`);
+    
+    // Fallback: create new tab if query/update fails
+    tab = await new Promise((resolve) => {
+      chrome.tabs.create({ url: TARGET_URL, active: false }, resolve);
+    });
+    tabCreated = true;
+  }
+
+  const tabId = tab.id;
+
+  // Store tab info in session for potential cleanup
+  if (clickSessionId) {
+    activeClickSessions.set(clickSessionId, {
+      ...activeClickSessions.get(clickSessionId),
+      tabId: tabId,
+      tabCreated: tabCreated,
+      tabReused: tabReused
+    });
+  }
 
   // Wait for the page to finish loading before messaging the content script
   const onUpdated = (updatedTabId, info) => {
@@ -54,7 +112,10 @@ Timestamp: ${new Date().toISOString()}`);
       chrome.tabs.sendMessage(tabId, { 
         type: "CHECK_IN",
         clickSessionId: clickSessionId,
-        processId: processId
+        processId: processId,
+        tabId: tabId // Send tab ID for potential cleanup
+      }).catch(error => {
+        console.log(`[DEBUG_LOG] Failed to send CHECK_IN message to tab ${tabId}: ${error.message}`);
       });
     }
   };
@@ -65,7 +126,10 @@ Timestamp: ${new Date().toISOString()}`);
     chrome.tabs.sendMessage(tabId, { 
       type: "CHECK_IN",
       clickSessionId: clickSessionId,
-      processId: processId
+      processId: processId,
+      tabId: tabId // Send tab ID for potential cleanup
+    }).catch(error => {
+      console.log(`[DEBUG_LOG] Failed to send CHECK_IN message to tab ${tabId} (timeout fallback): ${error.message}`);
     });
   }, 15000);
 }
@@ -326,9 +390,10 @@ Cookie Status: SUCCESSFULLY_VERIFIED_AND_ACCESSIBLE`);
     
     sendResponse({ ok: true, status: 'COOKIE_LOGGED' });
   }
+
   if (msg?.type === "AUTH_STATE_QUERY") {
     // Handle authentication state queries from content scripts
-    const AUTHENTICATION_COOLDOWN = 30000; // 30 seconds, same as content script
+    const AUTHENTICATION_COOLDOWN = 29 * 24 * 60 * 60 * 1000; // 29 days - matches SESSION_TOKEN 30-day validity with 1-day safety buffer
     const now = Date.now();
     let isRecentlyAuthenticated = false;
     let timeSinceLastAuth = 0;
@@ -355,6 +420,76 @@ Timestamp: ${new Date().toISOString()}`);
       cooldownActive: isRecentlyAuthenticated,
       sessionToken: authenticationState.sessionToken
     });
+  }
+
+  // NEW: Handle presence check completion and tab cleanup
+  if (msg?.type === "PRESENCE_CHECK_COMPLETE") {
+    const { success, tabId, clickSessionId, processId } = msg;
+    
+    // Find associated click session for correlation
+    let correlatedSession = null;
+    if (clickSessionId) {
+      correlatedSession = activeClickSessions.get(clickSessionId);
+    }
+    
+    console.log(`[DEBUG_LOG] PRESENCE_CHECK_COMPLETE received from content script
+Success: ${success}
+Tab ID: ${tabId}
+Click Session ID: ${clickSessionId || 'UNKNOWN'}
+Process ID: ${processId || 'UNKNOWN'}
+Tab Created: ${correlatedSession?.tabCreated || 'UNKNOWN'}
+Tab Reused: ${correlatedSession?.tabReused || 'UNKNOWN'}
+Timestamp: ${new Date().toISOString()}
+Action: ${success ? 'SCHEDULING_TAB_CLEANUP' : 'KEEPING_TAB_FOR_DEBUG'}`);
+    
+    if (success && tabId) {
+      // Close the tab after a short delay if the presence check was successful
+      setTimeout(() => {
+        chrome.tabs.remove(tabId, () => {
+          if (chrome.runtime.lastError) {
+            console.log(`[DEBUG_LOG] Tab cleanup failed: ${chrome.runtime.lastError.message}`);
+          } else {
+            console.log(`[DEBUG_LOG] TAB CLEANUP COMPLETED
+Tab ID: ${tabId}
+Click Session ID: ${clickSessionId || 'UNKNOWN'}
+Process ID: ${processId || 'UNKNOWN'}
+Cleanup Delay: 2000ms
+Tab Management: AUTOMATIC_CLEANUP_AFTER_SUCCESS
+Resource Usage: OPTIMIZED - Tab removed after completion
+Timestamp: ${new Date().toISOString()}`);
+          }
+        });
+      }, 2000); // 2 second delay to allow user to see the result
+      
+      // Update session status
+      if (correlatedSession) {
+        activeClickSessions.set(clickSessionId, {
+          ...correlatedSession,
+          status: 'COMPLETED_SUCCESS',
+          completionTime: new Date().toISOString(),
+          tabCleanupScheduled: true
+        });
+      }
+    } else {
+      // Keep tab open for debugging if there was an error
+      console.log(`[DEBUG_LOG] TAB CLEANUP SKIPPED
+Tab ID: ${tabId}
+Reason: ${success ? 'UNKNOWN_ERROR' : 'PRESENCE_CHECK_FAILED'}
+Action: Tab left open for debugging
+Timestamp: ${new Date().toISOString()}`);
+      
+      // Update session status
+      if (correlatedSession) {
+        activeClickSessions.set(clickSessionId, {
+          ...correlatedSession,
+          status: 'COMPLETED_ERROR',
+          completionTime: new Date().toISOString(),
+          tabCleanupScheduled: false
+        });
+      }
+    }
+    
+    sendResponse({ ok: true, status: success ? 'CLEANUP_SCHEDULED' : 'CLEANUP_SKIPPED' });
   }
 
   if (msg?.type === "SCHEDULE_ALARM") {
