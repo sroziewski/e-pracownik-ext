@@ -330,16 +330,33 @@ Action: Skipping redundant authentication`);
 }
 
 async function tryLoginIfNeeded() {
-  // Prevent concurrent authentication attempts
+  // Query global authentication state from background script
+  try {
+    const { isAuthenticated, timestamp, timeSinceLastAuth, cooldownActive } = await chrome.runtime.sendMessage({ type: "AUTH_STATE_QUERY" });
+    
+    if (isAuthenticated && cooldownActive) {
+      console.log(`[DEBUG_LOG] Skipping login – recently authenticated via global state
+Recent Auth Time: ${new Date(timestamp).toISOString()}
+Time Since Auth: ${timeSinceLastAuth}ms
+Cooldown Active: ${cooldownActive}
+Action: Using existing SESSION_TOKEN from global authentication state`);
+      return true;
+    }
+    
+    if (cooldownActive) {
+      console.log(`[DEBUG_LOG] Authentication cooldown active but session may be invalid
+Recent Auth Time: ${new Date(timestamp).toISOString()}
+Time Since Auth: ${timeSinceLastAuth}ms
+Action: Will check session status before proceeding`);
+    }
+  } catch (error) {
+    console.log(`[DEBUG_LOG] Failed to query global authentication state: ${error.message}`);
+  }
+  
+  // Prevent concurrent authentication attempts using module-level flag as fallback
   if (authenticationInProgress) {
     console.log("[DEBUG_LOG] Authentication already in progress, skipping duplicate attempt");
     return false;
-  }
-  
-  // Check if we recently authenticated successfully and still have valid session
-  if (await isRecentAuthenticationValid()) {
-    console.log("[DEBUG_LOG] Recent authentication is still valid, skipping login");
-    return true;
   }
   
   // First check if we have an active session

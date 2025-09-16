@@ -326,6 +326,37 @@ Cookie Status: SUCCESSFULLY_VERIFIED_AND_ACCESSIBLE`);
     
     sendResponse({ ok: true, status: 'COOKIE_LOGGED' });
   }
+  if (msg?.type === "AUTH_STATE_QUERY") {
+    // Handle authentication state queries from content scripts
+    const AUTHENTICATION_COOLDOWN = 30000; // 30 seconds, same as content script
+    const now = Date.now();
+    let isRecentlyAuthenticated = false;
+    let timeSinceLastAuth = 0;
+    
+    if (authenticationState.lastLoginAttempt) {
+      const lastAuthTime = new Date(authenticationState.lastLoginAttempt).getTime();
+      timeSinceLastAuth = now - lastAuthTime;
+      isRecentlyAuthenticated = timeSinceLastAuth < AUTHENTICATION_COOLDOWN;
+    }
+    
+    console.log(`[DEBUG_LOG] AUTH_STATE_QUERY received from content script
+Authentication State: ${authenticationState.isAuthenticated ? 'AUTHENTICATED' : 'NOT_AUTHENTICATED'}
+Last Login Attempt: ${authenticationState.lastLoginAttempt || 'NEVER'}
+Time Since Last Auth: ${timeSinceLastAuth}ms
+Recently Authenticated: ${isRecentlyAuthenticated}
+Cooldown Period: ${AUTHENTICATION_COOLDOWN}ms
+Session Token Present: ${authenticationState.sessionToken ? 'YES' : 'NO'}
+Timestamp: ${new Date().toISOString()}`);
+    
+    sendResponse({
+      isAuthenticated: authenticationState.isAuthenticated && isRecentlyAuthenticated,
+      timestamp: authenticationState.lastLoginAttempt ? new Date(authenticationState.lastLoginAttempt).getTime() : 0,
+      timeSinceLastAuth: timeSinceLastAuth,
+      cooldownActive: isRecentlyAuthenticated,
+      sessionToken: authenticationState.sessionToken
+    });
+  }
+
   if (msg?.type === "SCHEDULE_ALARM") {
     const { hour, minute, enabled } = msg.payload || {};
     chrome.alarms.clear(ALARM_NAME, () => {
