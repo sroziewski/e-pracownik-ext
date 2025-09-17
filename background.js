@@ -1,5 +1,6 @@
 /* JavaScript */
 const TARGET_URL = "https://e-pracownik.opi.org.pl/#/home";
+const ALARM_NAME = "autoCheckPresence";
 
 console.log(`[DEBUG_LOG] Extension loaded at ${new Date().toISOString()}`);
 
@@ -15,14 +16,30 @@ async function startOrFocusTab() {
             console.log("[DEBUG_LOG] No existing tab found. Creating a new one.");
             await chrome.tabs.create({ url: TARGET_URL });
         }
-    } catch (error) {
+    } catch (error)
+    {
         console.error("[DEBUG_LOG] Error in startOrFocusTab:", error);
     }
 }
 
+
+// =================== UPDATED ALARM LISTENER ===================
+// This now logs the time and timezone when the alarm fires.
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === ALARM_NAME) {
+        const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        console.log(`[DEBUG_LOG] AUTO-CHECK ALARM FIRED
+Current Time: ${new Date().toLocaleString()}
+Timezone: ${userTimezone}
+Action: Starting presence check.`);
+        startOrFocusTab();
+    }
+});
+// =============================================================
+
+
 // Main listener for all messages.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    // From popup.js
     if (msg.type === "RUN_CHECK_NOW") {
         console.log("[DEBUG_LOG] RUN_CHECK_NOW message received from popup.");
         startOrFocusTab();
@@ -30,28 +47,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
     }
 
-    // From contentScript.js, after a successful login
-    if (msg.type === "LOGIN_SUCCESSFUL") {
-        console.log(`[DEBUG_LOG] Received LOGIN_SUCCESSFUL from tab ${sender.tab.id}. Forcing navigation to home.`);
-        // Use the authoritative tabs API to navigate the tab. This will break the loop.
+    if (msg.type === "LOGIN_SUCCESSFUL_PLEASE_NAVIGATE") {
+        console.log(`[DEBUG_LOG] Received navigation request from tab ${sender.tab.id}. Navigating to home.`);
         chrome.tabs.update(sender.tab.id, { url: TARGET_URL });
         return;
     }
 
-    // From contentScript.js, to make API calls
     if (msg.type === "PROXY_FETCH") {
         fetch(msg.payload.url, msg.payload.options)
             .then(response => {
-                // We need to handle non-ok responses so the content script knows about them.
                 if (!response.ok) {
-                    // Don't throw an error, just pass the status along
-                    return { status: response.status, data: null };
+                    return response.text().then(text => {
+                        throw new Error(`HTTP error! status: ${response.status}, body: ${text}`);
+                    });
                 }
                 return response.text().then(text => ({ status: response.status, data: text }));
             })
             .then(result => sendResponse({ ok: true, response: result }))
             .catch(error => sendResponse({ ok: false, error: error.message }));
-        return true; // Essential for async fetch
+        return true;
     }
 
     if (msg.type === "SHOW_NOTIFICATION") {
@@ -63,4 +77,38 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         });
         return;
     }
+
+    // =================== UPDATED SCHEDULER ===================
+    // This now logs the time and timezone when an alarm is set.
+    if (msg.type === "SCHEDULE_ALARM") {
+        const { hour, minute, enabled } = msg.payload;
+        chrome.alarms.clear(ALARM_NAME, () => {
+            if (enabled) {
+                const now = new Date();
+                const next = new Date();
+                next.setHours(hour, minute, 0, 0);
+
+                if (next <= now) {
+                    next.setDate(next.getDate() + 1);
+                }
+
+                const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+                console.log(`[DEBUG_LOG] SCHEDULING ALARM
+Setting for: ${hour}:${minute.toString().padStart(2, '0')}
+Next Run Time: ${next.toLocaleString()}
+User Timezone: ${userTimezone}`);
+
+                chrome.alarms.create(ALARM_NAME, {
+                    when: next.getTime(),
+                    periodInMinutes: 24 * 60 // Daily
+                });
+            } else {
+                console.log("[DEBUG_LOG] Alarm disabled and cleared.");
+            }
+            sendResponse({ ok: true });
+        });
+        return true; // async response
+    }
+    // =============================================================
 });

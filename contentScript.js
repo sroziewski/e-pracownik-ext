@@ -1,4 +1,3 @@
-/* JavaScript */
 const TARGET_URL = "https://e-pracownik.opi.org.pl/#/home";
 
 console.log(`[DEBUG_LOG] Content script loaded. URL: ${location.href}`);
@@ -45,6 +44,24 @@ async function waitForElement(selector, timeout = 8000) {
     return null;
 }
 
+// =================== NEW ROBUST WAITING FUNCTION ===================
+async function waitForContent(textRegex, timeout = 10000) {
+    console.log(`[DEBUG_LOG] Actively polling for content: "${textRegex}" for up to ${timeout}ms...`);
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeout) {
+        const element = findByText(document.body, 'span, div', textRegex);
+        if (element) {
+            console.log("[DEBUG_LOG] Content found!");
+            return element;
+        }
+        await sleep(500); // Check every half second
+    }
+    console.error("[DEBUG_LOG] Timed out waiting for content.");
+    return null;
+}
+// =================================================================
+
+
 function fillInput(element, value) {
     element.value = value;
     element.dispatchEvent(new Event('input', { bubbles: true }));
@@ -81,32 +98,26 @@ async function performUILogin() {
     console.log("[DEBUG_LOG] Attempting UI-based login...");
     const creds = await chrome.storage.local.get(["username", "password"]);
     if (!creds.username || !creds.password) {
-        console.error("[DEBUG_LOG] Credentials not found. Halting.");
         return false;
     }
-
     const usernameField = await waitForElement(selectors.login.username);
     const passwordField = await waitForElement(selectors.login.password);
     const submitButton = await waitForElement(selectors.login.submit);
-
     if (!usernameField || !passwordField || !submitButton) {
-        console.error("[DEBUG_LOG] Login form fields not found. Halting.");
         return false;
     }
-
-    console.log("[DEBUG_LOG] Filling login form...");
     fillInput(usernameField, creds.username);
     fillInput(passwordField, creds.password);
     await sleep(500);
-
-    console.log("[DEBUG_LOG] Clicking submit button.");
     submitButton.click();
     return true;
 }
 
 async function clickButton() {
-    console.log("[DEBUG_LOG] On home page. Waiting for dashboard content...");
-    const dzisiajLabel = await findByText(document.body, 'span', textMatchers.dzisiajLabel);
+    console.log("[DEBUG_LOG] On home page. Waiting for dashboard to appear...");
+
+    // Use the new robust waiting function
+    const dzisiajLabel = await waitForContent(textMatchers.dzisiajLabel);
     if (!dzisiajLabel) {
         return { success: false, reason: "Button not found (Dashboard did not load)." };
     }
@@ -136,7 +147,6 @@ async function clickButton() {
     if (menuPanel) {
         const menuItem = findByText(menuPanel, selectors.obecnoscMenuItem, textMatchers.obecnosc);
         if (menuItem) {
-            console.log("[DEBUG_LOG] Clicking 'Obecność' from menu.");
             menuItem.click();
         } else {
             return { success: false, reason: "Button not found ('Obecność' missing from menu)." };
@@ -152,42 +162,40 @@ async function clickButton() {
     }
 }
 
-// =================== CORRECTED MAIN FUNCTION ===================
+
 async function main() {
     console.log(`[DEBUG_LOG] Main logic starting on: ${location.href}`);
+    const prefs = await chrome.storage.local.get(["notify", "enableAuto"]);
+    console.log(`[DEBUG_LOG] Preferences - Notify: ${!!prefs.notify}, Auto-Check: ${!!prefs.enableAuto}`);
 
     let finalStatus = { success: false, reason: "An unknown error occurred." };
 
     const isLoggedIn = await checkSessionStatus();
 
     if (isLoggedIn) {
-        console.log("[DEBUG_LOG] Session is valid.");
         if (isOnHomePage()) {
             finalStatus = await clickButton();
         } else {
-            finalStatus = { success: false, reason: "Logged in, but not on home page. Please navigate." };
-            console.log(finalStatus.reason);
+            finalStatus = { success: false, reason: "Logged in, but not on home page." };
+            window.location.href = TARGET_URL;
+            return;
         }
     } else {
-        console.log("[DEBUG_LOG] Session is invalid.");
         if (isOnLoginPage()) {
             const loginSuccess = await performUILogin();
-            // We stop here. The page will navigate, and the script will run again.
-            // No notification is needed at this exact moment.
-            return;
+            if (!loginSuccess) {
+                finalStatus = { success: false, reason: "Login failed. Halting." };
+            } else {
+                return;
+            }
         } else {
-            // This happens if we are logged out and on a strange URL.
-            finalStatus = { success: false, reason: "Not logged in. Redirecting to login page."};
+            finalStatus = { success: false, reason: "Not logged in. Redirecting to login."};
             window.location.href = "https://e-pracownik.opi.org.pl/#/auth/login";
-            // We return here to let the navigation happen. A notification will be triggered on the next page load if needed.
             return;
         }
     }
 
-    // After all actions are complete, check if we should send a notification
-    const { notify } = await chrome.storage.local.get("notify");
-    if (notify) {
-        // This is the key fix: We send a notification REGARDLESS of success or failure.
+    if (prefs.notify) {
         console.log(`[DEBUG_LOG] Sending notification: ${finalStatus.reason}`);
         chrome.runtime.sendMessage({
             type: "SHOW_NOTIFICATION",
@@ -198,6 +206,5 @@ async function main() {
         });
     }
 }
-// =============================================================
 
 main();
