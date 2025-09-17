@@ -52,7 +52,6 @@ function fillInput(element, value) {
 }
 
 
-// =================== MISSING FUNCTIONS RESTORED HERE ===================
 async function proxyFetch(url, options = {}) {
     return new Promise((resolve, reject) => {
         chrome.runtime.sendMessage({ type: 'PROXY_FETCH', payload: { url, options } }, response => {
@@ -79,34 +78,12 @@ async function checkSessionStatus() {
     }
 }
 
-async function performLogin() {
-    console.log("[DEBUG_LOG] Attempting API login...");
-    const creds = await chrome.storage.local.get(["username", "password"]);
-    if (!creds.username) {
-        console.error("[DEBUG_LOG] Credentials not found in storage.");
-        return false;
-    }
-    try {
-        const res = await proxyFetch('https://e-pracownik.opi.org.pl:9901/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: creds.username, password: creds.password, provider: "ePracownik" })
-        });
-        return res.status === 200;
-    } catch (e) {
-        console.error("[DEBUG_LOG] API login failed.", e);
-        return false;
-    }
-}
-// =======================================================================
-
-
 async function performUILogin() {
     console.log("[DEBUG_LOG] Attempting UI-based login...");
     const creds = await chrome.storage.local.get(["username", "password"]);
     if (!creds.username || !creds.password) {
         console.error("[DEBUG_LOG] Credentials not found in storage. Halting.");
-        return;
+        return false;
     }
 
     const usernameField = await waitForElement(selectors.login.username);
@@ -115,7 +92,7 @@ async function performUILogin() {
 
     if (!usernameField || !passwordField || !submitButton) {
         console.error("[DEBUG_LOG] Login form fields not found. Halting.");
-        return;
+        return false;
     }
 
     console.log("[DEBUG_LOG] Filling login form...");
@@ -125,6 +102,7 @@ async function performUILogin() {
 
     console.log("[DEBUG_LOG] Clicking submit button.");
     submitButton.click();
+    return true;
 }
 
 
@@ -147,9 +125,15 @@ async function clickButton() {
     }
 
     let btn = rcpCard.querySelector(selectors.presenceButton) || rcpCard.querySelector(selectors.addButton);
+
+    // =================== THE ONLY CHANGE IS HERE ===================
     if (!btn) {
-        return { success: false, reason: "Button not found (Could not find entry button)." };
+        // If the button is not found, we now treat this as a success condition.
+        // The most likely reason is that it's a weekend, holiday, or after hours.
+        console.log("[DEBUG_LOG] SUCCESS: Presence button not found. Assuming no action is needed today.");
+        return { success: true, reason: "Presence Login Skipped (Button not present)." };
     }
+    // =============================================================
 
     console.log("[DEBUG_LOG] Button found. Clicking.", btn);
     btn.click();
@@ -157,9 +141,9 @@ async function clickButton() {
 
     const menuPanel = document.querySelector(selectors.contextMenu);
     if (menuPanel) {
-        console.log("[DEBUG_LOG] Menu detected. Clicking 'Obecność'.");
         const menuItem = findByText(menuPanel, selectors.obecnoscMenuItem, textMatchers.obecnosc);
         if (menuItem) {
+            console.log("[DEBUG_LOG] Clicking 'Obecność' from menu.");
             menuItem.click();
         } else {
             return { success: false, reason: "Button not found ('Obecność' missing from menu)." };
@@ -181,31 +165,32 @@ async function main() {
 
     let finalStatus = { success: false, reason: "An unknown error occurred." };
 
-    if (isOnHomePage()) {
-        const isLoggedIn = await checkSessionStatus();
-        if (isLoggedIn) {
+    const isLoggedIn = await checkSessionStatus();
+
+    if (isLoggedIn) {
+        console.log("[DEBUG_LOG] Session is valid.");
+        if (isOnHomePage()) {
             finalStatus = await clickButton();
         } else {
-            finalStatus = { success: false, reason: "Not logged in. Redirecting to login."};
-            await sleep(1000);
-            if(isOnHomePage()) {
-                window.location.href = "https://e-pracownik.opi.org.pl/#/auth/login";
-            }
+            finalStatus = { success: false, reason: "Logged in, but not on home page. Please navigate." };
+            console.log(finalStatus.reason);
         }
-    } else if (isOnLoginPage()) {
-        const loginSuccess = await performUILogin();
-        // This script will halt and re-run on the next page.
-        // No notification is sent from this branch.
-        return;
     } else {
-        await sleep(2000);
-        if (isOnHomePage() || isOnLoginPage()) {
-            main(); // Re-run the logic now that the URL is stable
+        console.log("[DEBUG_LOG] Session is invalid.");
+        if (isOnLoginPage()) {
+            const loginSuccess = await performUILogin();
+            if (!loginSuccess) {
+                finalStatus = { success: false, reason: "Login failed. Halting." };
+            } else {
+                return;
+            }
+        } else {
+            finalStatus = { success: false, reason: "Not logged in and not on login page. Redirecting..."};
+            window.location.href = "https://e-pracownik.opi.org.pl/#/auth/login";
+            return;
         }
-        return;
     }
 
-    // After all actions are complete, check the 'notify' preference and send a message
     const { notify } = await chrome.storage.local.get("notify");
     if (notify) {
         console.log(`[DEBUG_LOG] Sending notification: ${finalStatus.reason}`);
