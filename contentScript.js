@@ -328,11 +328,14 @@ Authentication State: SUCCESS
 Timestamp: ${new Date().toISOString()}
 Next Auth Allowed After: ${new Date(lastAuthenticationAttempt + AUTHENTICATION_COOLDOWN).toISOString()}`);
       
-      // Navigate to home page after successful API login
-      if (!isOnTargetPage()) {
-        window.location.href = "https://e-pracownik.opi.org.pl/#/home";
-        await sleep(2000); // Wait for navigation
-      }
+      // RELOAD the page to get the authenticated view.
+      // The content script will run again, but this time checkSessionStatus() will pass.
+      console.log(`[DEBUG_LOG] API login successful. Reloading page to enter authenticated state...`);
+      location.reload();
+      
+      // The script will halt here due to the reload. We wait indefinitely
+      // to prevent any further code in this context from running.
+      await new Promise(() => {}); 
       return true;
     }
   } finally {
