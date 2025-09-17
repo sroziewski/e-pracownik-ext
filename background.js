@@ -326,8 +326,20 @@ Action: Initiating openTargetAndRunCheck with session tracking`);
   if (msg?.type === "NAVIGATE_TAB") {
     if (_sender.tab && _sender.tab.id && msg.url) {
       console.log(`[DEBUG_LOG] Received NAVIGATE_TAB request for tab ${_sender.tab.id} to URL ${msg.url}`);
+      
+      // Find the session and update its state to prevent re-triggering.
+      for (const [sessionId, sessionData] of activeClickSessions.entries()) {
+        if (sessionData.tabId === _sender.tab.id && (sessionData.status === 'PROCESSING' || sessionData.status === 'CHECK_IN_SENT')) {
+          activeClickSessions.set(sessionId, {
+            ...sessionData,
+            status: 'AWAITING_HOME_LOAD' // NEW STATE
+          });
+          console.log(`[DEBUG_LOG] Session ${sessionId} state changed to AWAITING_HOME_LOAD.`);
+          break;
+        }
+      }
+      
       chrome.tabs.update(_sender.tab.id, { url: msg.url });
-      // No response needed, this is a fire-and-forget action.
     }
     return; // No async response.
   }
@@ -541,9 +553,18 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     let clickSessionId = null;
 
     for (const [sessionId, sessionData] of activeClickSessions.entries()) {
-      if (sessionData.tabId === tabId && sessionData.status === 'PROCESSING') {
+      // Trigger if the session is in its initial state OR if it has just logged in and is waiting for the home page to load.
+      if (sessionData.tabId === tabId && (sessionData.status === 'PROCESSING' || sessionData.status === 'AWAITING_HOME_LOAD')) {
         correlatedSession = sessionData;
         clickSessionId = sessionId;
+        
+        // IMPORTANT: Update state to prevent re-triggering on the SAME page load (e.g., from sub-frame navigations)
+        // We now consider this CHECK_IN message sent. The next state change will come from the content script.
+        activeClickSessions.set(sessionId, {
+          ...sessionData,
+          status: 'CHECK_IN_SENT' 
+        });
+        console.log(`[DEBUG_LOG] Session ${sessionId} state changed to CHECK_IN_SENT.`);
         break;
       }
     }
