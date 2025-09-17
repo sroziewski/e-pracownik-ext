@@ -3,20 +3,24 @@ const TARGET_URL = "https://e-pracownik.opi.org.pl/#/home";
 
 console.log(`[DEBUG_LOG] Content script loaded. URL: ${location.href}`);
 
-// =================== CORRECTED SELECTORS BASED ON YOUR HTML ===================
+// =================== UPDATED SELECTORS FOR THE PRESENCE BUTTON ===================
 const selectors = {
     login: {
-        username: "input[name='loginInput']", // Using the correct 'name' attribute
-        password: "input[name='passwordInput']", // Using the correct 'name' attribute
+        username: "input[name='loginInput']",
+        password: "input[name='passwordInput']",
         submit: "button[type='submit']"
     },
+    // This selector now specifically targets the purple "RCP" card that contains the button.
+    rcpCard: "app-rcp-card",
     presenceStatus: ".rcp-time-tracking-card-status-label--present",
-    presenceButton: ".smart-button.smart-button-add"
+    // This is a very specific selector for the button based on your HTML.
+    presenceButton: ".smart-button.smart-button-add.palette-Purple-300"
 };
 // ============================================================================
 
 const textMatchers = {
-    markPresence: /rozpocznij/i
+    // This text is inside the button and is a great fallback.
+    markPresence: /rozpocznij.*obecność/i
 };
 
 function isOnLoginPage() {
@@ -29,6 +33,7 @@ function isOnHomePage() {
 
 async function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 
+// Updated to be more flexible
 function findByText(root, selector, regex) {
     for (const el of root.querySelectorAll(selector)) {
         if (regex.test(el.innerText || el.textContent)) return el;
@@ -36,19 +41,18 @@ function findByText(root, selector, regex) {
     return null;
 }
 
-// A helper function to robustly wait for an element to appear in the DOM
-async function waitForElement(selector, timeout = 5000) {
+async function waitForElement(selector, timeout = 7000) {
     const startTime = Date.now();
     while (Date.now() - startTime < timeout) {
         const element = document.querySelector(selector);
         if (element) return element;
-        await sleep(200);
+        await sleep(250);
     }
-    return null; // Return null if the element is not found within the timeout
+    console.error(`[DEBUG_LOG] Element not found after ${timeout}ms: ${selector}`);
+    return null;
 }
 
 
-// Function to fill an input field and trigger Angular's change detection
 function fillInput(element, value) {
     element.value = value;
     element.dispatchEvent(new Event('input', { bubbles: true }));
@@ -63,20 +67,18 @@ async function performUILogin() {
         return;
     }
 
-    // Use the robust waitForElement function to find the form fields
     const usernameField = await waitForElement(selectors.login.username);
     const passwordField = await waitForElement(selectors.login.password);
     const submitButton = await waitForElement(selectors.login.submit);
 
     if (!usernameField || !passwordField || !submitButton) {
-        console.error("[DEBUG_LOG] Login form fields not found even after waiting. Halting. Please check selectors.");
+        console.error("[DEBUG_LOG] Login form fields not found. Halting.");
         return;
     }
 
-    console.log("[DEBUG_LOG] Login form fields found. Filling form...");
+    console.log("[DEBUG_LOG] Filling login form...");
     fillInput(usernameField, creds.username);
     fillInput(passwordField, creds.password);
-
     await sleep(500);
 
     console.log("[DEBUG_LOG] Clicking submit button.");
@@ -84,22 +86,38 @@ async function performUILogin() {
 }
 
 async function clickButton() {
-    console.log("[DEBUG_LOG] Now on home page. Waiting for widgets to render...");
-    await sleep(4000);
-
-    if (document.querySelector(selectors.presenceStatus)) {
-        console.log("[DEBUG_LOG] SUCCESS: Already present.");
-        return;
-    }
-
-    let btn = document.querySelector(selectors.presenceButton) || findByText(document.body, 'button, div', textMatchers.markPresence);
-    if (!btn) {
-        console.error("[DEBUG_LOG] FAILURE: Button not found. Capturing final HTML.");
+    console.log("[DEBUG_LOG] Now on home page. Waiting for RCP card to render...");
+    // First, wait for the main "RCP" card to appear on the page.
+    const rcpCard = await waitForElement(selectors.rcpCard);
+    if (!rcpCard) {
+        console.error("[DEBUG_LOG] FAILURE: The main RCP card was not found on the page.");
         await capturePageContent();
         return;
     }
 
-    console.log("[DEBUG_LOG] Button found. Clicking.");
+    console.log("[DEBUG_LOG] RCP card found. Now checking status and looking for button inside it.");
+    await sleep(1000); // Short extra wait for content inside the card
+
+    if (rcpCard.querySelector(selectors.presenceStatus)) {
+        console.log("[DEBUG_LOG] SUCCESS: Already present.");
+        return;
+    }
+
+    // Look for the button using our specific and fallback methods, but only within the RCP card.
+    let btn = rcpCard.querySelector(selectors.presenceButton) || findByText(rcpCard, 'div, span', textMatchers.markPresence);
+
+    if (!btn) {
+        console.error("[DEBUG_LOG] FAILURE: Presence button not found inside the RCP card. Capturing final HTML.");
+        await capturePageContent();
+        return;
+    }
+
+    // If we found the text, we need to click its parent container, the smart-button div
+    if (!btn.classList.contains('smart-button')) {
+        btn = btn.closest('.smart-button');
+    }
+
+    console.log("[DEBUG_LOG] Button found. Clicking.", btn);
     btn.click();
     await sleep(2000);
 
@@ -128,18 +146,14 @@ async function main() {
         console.log("[DEBUG_LOG] Detected we are on the login page.");
         await performUILogin();
     } else {
-        // This case handles when the script loads before the SPA redirects to /#/auth/login
         console.log("[DEBUG_LOG] Not on a recognized page yet, waiting for SPA redirect...");
-        await sleep(2000); // Wait for the redirect
+        await sleep(2000);
         if (isOnLoginPage()) {
-            console.log("[DEBUG_LOG] Redirect to login page detected.");
             await performUILogin();
         } else if(isOnHomePage()) {
-            console.log("[DEBUG_LOG] Redirect to home page detected (already logged in).");
             await clickButton();
         }
     }
 }
 
-// Start the process directly.
 main();
