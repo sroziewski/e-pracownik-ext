@@ -469,6 +469,11 @@ async function ensurePresence() {
       if (document.body) break;
     }
 
+    // Log the page's HTML to help debug the selectors
+    if (isOnTargetPage()) {
+        await capturePageContent();
+    }
+
     const result = await clickPresenceButtonIfNeeded();
     return {
       ok: true,
