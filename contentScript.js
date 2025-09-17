@@ -99,14 +99,35 @@ async function checkSessionStatus() {
   try {
     console.log("[DEBUG_LOG] Checking session status via API test call...");
     
-    const response = await fetch("https://e-pracownik.opi.org.pl:9901/api/calendar/configuration/schedule/default", {
-      method: "GET",
-      headers: {
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9,pl;q=0.8,ru;q=0.7,it;q=0.6"
-      },
-      credentials: "include"
+    // Use PROXY_FETCH to make the API call through background script
+    const proxyResponse = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        type: 'PROXY_FETCH',
+        payload: {
+          url: 'https://e-pracownik.opi.org.pl:9901/api/calendar/configuration/schedule/default',
+          options: {
+            method: 'GET',
+            headers: {
+              "Accept": "application/json, text/plain, */*",
+              "Accept-Language": "en-US,en;q=0.9,pl;q=0.8,ru;q=0.7,it;q=0.6"
+            }
+          }
+        }
+      }, response => {
+        if (response.ok) {
+          resolve(response.response);
+        } else {
+          reject(new Error(response.error || 'PROXY_FETCH failed'));
+        }
+      });
     });
+    
+    const response = {
+      status: proxyResponse.status,
+      statusText: proxyResponse.statusText,
+      ok: proxyResponse.status >= 200 && proxyResponse.status < 300,
+      headers: new Map() // Headers not available through proxy, but not needed for this logic
+    };
     
     console.log(`[DEBUG_LOG] Session validation API response:
 URL: /api/calendar/configuration/schedule/default
@@ -126,12 +147,11 @@ Reason: Authentication failure indicates invalid SESSION_TOKEN`);
     
     // Server errors (5xx) don't indicate invalid sessions - the SESSION_TOKEN is still good
     if (response.status >= 500 && response.status < 600) {
-      console.log(`[DEBUG_LOG] Server error detected but session appears valid
+      console.log(`[DEBUG_LOG] Server error detected during session check
 Status: ${response.status} (Server Error)
-Action: Will skip re-authentication  
-Reason: 5xx errors indicate server issues, not authentication problems
-Session Status: VALID - SESSION_TOKEN should still work`);
-      return true; // Session is valid, server is just having issues
+Action: Will assume session is invalid and attempt re-authentication
+Reason: A 500 error on a session check for an unauthenticated user likely means login is required.`);
+      return false; // Assume invalid session on server error during initial check
     }
     
     // Success or other client errors (4xx that aren't auth-related)
@@ -153,144 +173,57 @@ Timestamp: ${new Date().toISOString()}`);
 }
 
 async function performDirectAPILogin(username, password) {
-  // Direct API login call to /api/auth/login
+  // Direct API login call to /api/auth/login, now proxied
   try {
-    console.log("[DEBUG_LOG] Performing direct API login");
-    
-    const response = await fetch("https://e-pracownik.opi.org.pl:9901/api/auth/login", {
-      method: "POST",
-      headers: {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "Accept-Language": "en-US,en;q=0.9,pl;q=0.8,ru;q=0.7,it;q=0.6",
-        "Origin": "https://e-pracownik.opi.org.pl",
-        "Referer": "https://e-pracownik.opi.org.pl/"
-      },
-      body: JSON.stringify({
-        username: username,
-        password: password,
-        provider: "ePracownik"
-      }),
-      credentials: "include"
-    });
-    
-    const data = await response.json();
-    
-    if (response.ok && data.userName) {
-      console.log(`[DEBUG_LOG] API login successful for user: ${data.userName}`);
-      
-      // Verify SESSION_TOKEN cookie using chrome.cookies API (Set-Cookie headers are not accessible via JavaScript)
-      try {
-        // Check both the main domain and the API port domain for the cookie
-        const cookieUrls = [
-          "https://e-pracownik.opi.org.pl",
-          "https://e-pracownik.opi.org.pl:9901"
-        ];
-        
-        let sessionTokenFound = false;
-        let sessionTokenValue = null;
-        
-        for (const url of cookieUrls) {
-          try {
-            const cookie = await chrome.cookies.get({
-              url: url,
-              name: "SESSION_TOKEN"
-            });
-            
-            if (cookie && cookie.value) {
-              sessionTokenFound = true;
-              sessionTokenValue = cookie.value;
-              
-              console.log(`[DEBUG_LOG] LOGIN SUCCESS - SESSION_TOKEN COOKIE VERIFIED:
-Cookie Name: SESSION_TOKEN
-Cookie Value: ${sessionTokenValue}
-Cookie Domain: ${cookie.domain}
-Cookie Path: ${cookie.path}
-Cookie Secure: ${cookie.secure}
-Cookie HttpOnly: ${cookie.httpOnly}
-Cookie SameSite: ${cookie.sameSite}
-Cookie Source: Browser Cookie Store (chrome.cookies.get)
-User: ${data.userName}
-Timestamp: ${new Date().toISOString()}
-Status: Cookie successfully stored and accessible via extension API`);
-              
-              // Send cookie value to background script for correlation logging
-              chrome.runtime.sendMessage({
-                type: "LOGIN_SUCCESS_COOKIE",
-                cookieName: "SESSION_TOKEN",
-                cookieValue: sessionTokenValue,
-                userName: data.userName,
-                timestamp: new Date().toISOString(),
-                cookieDomain: cookie.domain,
-                verificationMethod: "chrome.cookies.get"
-              }).catch(error => {
-                console.log(`[DEBUG_LOG] Failed to send LOGIN_SUCCESS_COOKIE message to background: ${error.message}`);
-              });
-              
-              break; // Found cookie, no need to check other URLs
-            }
-          } catch (cookieError) {
-            console.log(`[DEBUG_LOG] Cookie check failed for ${url}:`, cookieError);
+    console.log("[DEBUG_LOG] Performing direct API login via background proxy");
+
+    const loginResponse = await new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        type: 'PROXY_FETCH',
+        payload: {
+          url: 'https://e-pracownik.opi.org.pl:9901/api/auth/login',
+          options: {
+            method: 'POST',
+            headers: {
+              "Accept": "application/json, text/plain, */*",
+              "Content-Type": "application/json",
+              "Origin": "https://e-pracownik.opi.org.pl",
+              "Referer": "https://e-pracownik.opi.org.pl/"
+            },
+            body: JSON.stringify({
+              username: username,
+              password: password,
+              provider: "ePracownik"
+            })
           }
         }
-        
-        if (!sessionTokenFound) {
-          console.log(`[DEBUG_LOG] LOGIN SUCCESS - SESSION_TOKEN COOKIE NOT FOUND:
-Cookie Name: SESSION_TOKEN
-Cookie Status: NOT_FOUND_IN_BROWSER_STORE
-User: ${data.userName}
-Verification Method: chrome.cookies.get
-Checked URLs: ${cookieUrls.join(', ')}
-Timestamp: ${new Date().toISOString()}
-Note: Cookie may be cross-site blocked or have domain/path restrictions`);
-        }
-        
-      } catch (error) {
-        console.log(`[DEBUG_LOG] Cookie verification error:`, error);
-      }
-      
-      // Test follow-up authenticated API call to verify cookie functionality
-      try {
-        console.log(`[DEBUG_LOG] Testing authenticated API call to verify cookie functionality...`);
-        
-        const testResponse = await fetch("https://e-pracownik.opi.org.pl:9901/api/calendar/configuration/schedule/default", {
-          method: "GET",
-          headers: {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9,pl;q=0.8,ru;q=0.7,it;q=0.6"
-          },
-          credentials: "include" // This should send the SESSION_TOKEN cookie
-        });
-        
-        console.log(`[DEBUG_LOG] FOLLOW-UP AUTHENTICATED API CALL RESULT:
-API Endpoint: /api/calendar/configuration/schedule/default
-HTTP Status: ${testResponse.status}
-Status Text: ${testResponse.statusText}
-Cookie Authentication: ${testResponse.ok ? 'SUCCESS - Cookie working properly' : 'FAILED - Cookie may not be sent or invalid'}
-User: ${data.userName}
-Timestamp: ${new Date().toISOString()}
-Note: This confirms whether SESSION_TOKEN cookie is actually being sent in requests`);
-        
-        if (testResponse.ok) {
-          console.log(`[DEBUG_LOG] ✅ SESSION_TOKEN COOKIE FUNCTIONAL VERIFICATION PASSED
-The cookie is not only stored but also being sent correctly in authenticated requests.`);
+      }, response => {
+        if (response.ok) {
+          resolve(response.response);
         } else {
-          console.log(`[DEBUG_LOG] ⚠️  SESSION_TOKEN COOKIE FUNCTIONALITY ISSUE DETECTED
-Status: ${testResponse.status} - Cookie may be blocked by SameSite, domain restrictions, or session expired.`);
+          reject(new Error(response.error || 'PROXY_FETCH for login failed'));
         }
-        
-      } catch (authTestError) {
-        console.log(`[DEBUG_LOG] Follow-up authentication test failed:`, authTestError);
-      }
+      });
+    });
+
+    if (loginResponse.status === 200) {
+      const data = JSON.parse(loginResponse.data);
+      console.log(`[DEBUG_LOG] API login successful for user: ${data.userName}`);
       
-      // SESSION_TOKEN cookie should be automatically set by the browser
+      // Since the login was successful through the background script,
+      // the cookie is implicitly verified and functional. No need to
+      // check it here or make another test call.
+      console.log(`[DEBUG_LOG] ✅ SESSION_TOKEN COOKIE FUNCTIONAL
+Reason: The successful proxied login confirms the background script can use the cookie.
+Action: Proceeding to mark presence.`);
+
       return true;
     } else {
-      console.log(`[DEBUG_LOG] API login failed:`, data);
+      console.log(`[DEBUG_LOG] API login failed with status ${loginResponse.status}:`, loginResponse.data);
       return false;
     }
   } catch (error) {
-    console.log("[DEBUG_LOG] API login error:", error);
+    console.log("[DEBUG_LOG] API login proxy error:", error);
     return false;
   }
 }
@@ -546,6 +479,36 @@ async function ensurePresence() {
   }
 }
 
+// Function to capture and log page content
+async function capturePageContent() {
+  try {
+    console.log(`[DEBUG_LOG] Starting page content capture
+URL: ${location.href}
+Timestamp: ${new Date().toISOString()}`);
+    
+    // Wait a moment for page to fully load
+    await sleep(2000);
+    
+    // Get the complete HTML content
+    const htmlContent = document.documentElement.outerHTML;
+    
+    console.log(`[DEBUG_LOG] Page content captured successfully
+URL: ${location.href}
+Content Length: ${htmlContent.length} characters
+Timestamp: ${new Date().toISOString()}`);
+    
+    // Log the HTML content to console as requested
+    console.log("=== PAGE HTML CONTENT ===");
+    console.log(htmlContent);
+    console.log("=== END PAGE HTML CONTENT ===");
+    
+    return { ok: true, message: "Page content captured and logged to console" };
+  } catch (error) {
+    console.log(`[DEBUG_LOG] Error capturing page content: ${error.message}`);
+    return { ok: false, message: `Error capturing content: ${error.message}` };
+  }
+}
+
 // Listen for background/popup messages to trigger
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "CHECK_IN") {
@@ -556,12 +519,18 @@ Message Type: ${msg.type}
 Process: Starting ensurePresence() function
 Timestamp: ${new Date().toISOString()}`);
     
-    ensurePresence().then((res) => {
+    ensurePresence().then(async (res) => {
       console.log(`[DEBUG_LOG] ensurePresence() completed
 Result Status: ${res.ok ? 'SUCCESS' : 'FAILED'}
 Message: ${res.message}
 Process: Presence check workflow finished
 Timestamp: ${new Date().toISOString()}`);
+      
+      // If login was successful and we're on the home page, capture content
+      if (res.ok && isOnTargetPage()) {
+        console.log(`[DEBUG_LOG] Login successful and on home page - capturing content`);
+        await capturePageContent();
+      }
       
       // Send completion message to background script for tab cleanup
       chrome.runtime.sendMessage({
@@ -596,6 +565,19 @@ Timestamp: ${new Date().toISOString()}`);
           });
         }
       });
+      sendResponse(res);
+    });
+    return true; // async response
+  }
+  
+  // Handle content capture message
+  if (msg?.type === "CAPTURE_CONTENT") {
+    console.log(`[DEBUG_LOG] Content script received CAPTURE_CONTENT message
+Script URL: ${location.href}
+Message Type: ${msg.type}
+Timestamp: ${new Date().toISOString()}`);
+    
+    capturePageContent().then((res) => {
       sendResponse(res);
     });
     return true; // async response

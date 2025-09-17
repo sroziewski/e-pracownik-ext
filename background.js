@@ -492,6 +492,38 @@ Timestamp: ${new Date().toISOString()}`);
     sendResponse({ ok: true, status: success ? 'CLEANUP_SCHEDULED' : 'CLEANUP_SKIPPED' });
   }
 
+  // NEW: Handle proxied fetch requests from content scripts
+  if (msg?.type === "PROXY_FETCH") {
+    const { url, options } = msg.payload;
+    
+    console.log(`[DEBUG_LOG] PROXY_FETCH received from content script
+URL: ${url}
+Timestamp: ${new Date().toISOString()}`);
+
+    // The fetch call from the background script will automatically include
+    // the HttpOnly SESSION_TOKEN cookie for the target domain.
+    fetch(url, options)
+      .then(response => {
+        // Resolve the promise with status and data so the content script
+        // knows if the call was successful.
+        return response.text().then(text => ({
+          status: response.status,
+          statusText: response.statusText,
+          data: text
+        }));
+      })
+      .then(result => {
+        console.log(`[DEBUG_LOG] PROXY_FETCH successful for ${url}. Status: ${result.status}`);
+        sendResponse({ ok: true, response: result });
+      })
+      .catch(error => {
+        console.error(`[DEBUG_LOG] PROXY_FETCH network error for ${url}: ${error.message}`);
+        sendResponse({ ok: false, error: error.message });
+      });
+
+    return true; // Indicates we will send a response asynchronously.
+  }
+
   if (msg?.type === "SCHEDULE_ALARM") {
     const { hour, minute, enabled } = msg.payload || {};
     chrome.alarms.clear(ALARM_NAME, () => {
