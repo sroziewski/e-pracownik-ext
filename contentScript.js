@@ -25,11 +25,11 @@ const selectors = {
 
   // Presence status element: something that indicates “already present”
   // TODO: Update to a definitive selector if possible
-  presenceStatus: "[data-test='today-present'], .today-present, .presence-status",
+  presenceStatus: ".rcp-time-tracking-card-status-label--present, [data-test='today-present'], .today-present, .presence-status",
 
   // Presence button to click to mark today as present
   // Prefer a direct, explicit button if available. Otherwise we’ll fall back to the Angular Material menu trigger.
-  presenceButton: "button[data-test='presence-button'], button.mark-presence, .actions button"
+  presenceButton: "#rcp-card .smart-button, button[data-test='presence-button'], button.mark-presence, .actions button"
 };
 
 // Fallback text checks for Polish UI (heuristic)
@@ -469,11 +469,6 @@ async function ensurePresence() {
       if (document.body) break;
     }
 
-    // Log the page's HTML to help debug the selectors
-    if (isOnTargetPage()) {
-        await capturePageContent();
-    }
-
     const result = await clickPresenceButtonIfNeeded();
     return {
       ok: true,
@@ -531,12 +526,6 @@ Result Status: ${res.ok ? 'SUCCESS' : 'FAILED'}
 Message: ${res.message}
 Process: Presence check workflow finished
 Timestamp: ${new Date().toISOString()}`);
-      
-      // If login was successful and we're on the home page, capture content
-      if (res.ok && isOnTargetPage()) {
-        console.log(`[DEBUG_LOG] Login successful and on home page - capturing content`);
-        await capturePageContent();
-      }
       
       // Send completion message to background script for tab cleanup
       chrome.runtime.sendMessage({
