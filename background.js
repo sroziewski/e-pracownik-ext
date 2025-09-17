@@ -322,26 +322,13 @@ Action: Initiating openTargetAndRunCheck with session tracking`);
     });
   }
   
-  // NEW: Handle navigation requests from content scripts
-  if (msg?.type === "NAVIGATE_TAB") {
-    if (_sender.tab && _sender.tab.id && msg.url) {
-      console.log(`[DEBUG_LOG] Received NAVIGATE_TAB request for tab ${_sender.tab.id} to URL ${msg.url}`);
-      
-      // Find the session and update its state to prepare for the next page load.
-      for (const [sessionId, sessionData] of activeClickSessions.entries()) {
-        if (sessionData.tabId === _sender.tab.id && (sessionData.status === 'PROCESSING' || sessionData.status === 'CHECK_IN_SENT')) {
-          activeClickSessions.set(sessionId, {
-            ...sessionData,
-            status: 'AWAITING_HOME_LOAD'
-          });
-          console.log(`[DEBUG_LOG] Session ${sessionId} state changed to AWAITING_HOME_LOAD.`);
-          break;
-        }
-      }
-      
-      chrome.tabs.update(_sender.tab.id, { url: msg.url });
+  // ADDED a handler for LOGIN_SUCCESSFUL to orchestrate the reload.
+  if (msg?.type === "LOGIN_SUCCESSFUL") {
+    if (_sender.tab && _sender.tab.id) {
+      console.log(`[DEBUG_LOG] Received LOGIN_SUCCESSFUL from tab ${_sender.tab.id}. Reloading tab to apply auth state.`);
+      chrome.tabs.reload(_sender.tab.id);
     }
-    return; // No async response.
+    return;
   }
   
   if (msg?.type === "LOGIN_SUCCESS_COOKIE") {

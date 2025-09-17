@@ -328,11 +328,11 @@ Authentication State: SUCCESS
 Timestamp: ${new Date().toISOString()}
 Next Auth Allowed After: ${new Date(lastAuthenticationAttempt + AUTHENTICATION_COOLDOWN).toISOString()}`);
       
-      // Tell the background script to navigate to the home page. This is the correct way for SPAs.
-      console.log(`[DEBUG_LOG] API login successful. Requesting background to navigate to #/home...`);
-      chrome.runtime.sendMessage({ type: "NAVIGATE_TAB", url: "https://e-pracownik.opi.org.pl/#/home" });
+      // Tell the background script that login was successful, so it can reload the tab.
+      console.log(`[DEBUG_LOG] API login successful. Requesting background to reload the tab...`);
+      chrome.runtime.sendMessage({ type: "LOGIN_SUCCESSFUL" });
       
-      // The script will halt here and wait for navigation.
+      // The script will halt here and wait for the reload.
       await new Promise(() => {});
       return true;
     }
@@ -433,6 +433,14 @@ async function clickPresenceButtonIfNeeded() {
     return { changed: false, reason: "Presence button or menu trigger not found. Adjust selectors." };
   }
 
+  // Capture and print HTML content before clicking the button
+  console.log(`[DEBUG_LOG] About to click presence button - capturing page HTML
+Button element: ${btn.tagName}${btn.className ? '.' + btn.className.replace(/\s+/g, '.') : ''}
+Button text: ${(btn.innerText || btn.textContent || '').trim()}
+Timestamp: ${new Date().toISOString()}`);
+  
+  await capturePageContent();
+
   btn.click();
 
   // If we clicked a menu trigger, choose the appropriate menu item
@@ -467,6 +475,11 @@ async function ensurePresence() {
     for (let i = 0; i < 10; i++) {
       await sleep(500);
       if (document.body) break;
+    }
+
+    // ADDED BACK: Log the page's HTML to help debug the selectors
+    if (isOnTargetPage()) {
+        await capturePageContent();
     }
 
     const result = await clickPresenceButtonIfNeeded();
