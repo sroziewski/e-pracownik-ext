@@ -16,15 +16,12 @@ async function startOrFocusTab() {
             console.log("[DEBUG_LOG] No existing tab found. Creating a new one.");
             await chrome.tabs.create({ url: TARGET_URL });
         }
-    } catch (error)
-    {
+    } catch (error) {
         console.error("[DEBUG_LOG] Error in startOrFocusTab:", error);
     }
 }
 
-
-// =================== UPDATED ALARM LISTENER ===================
-// This now logs the time and timezone when the alarm fires.
+// Handles when the scheduled alarm fires.
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === ALARM_NAME) {
         const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -35,8 +32,6 @@ Action: Starting presence check.`);
         startOrFocusTab();
     }
 });
-// =============================================================
-
 
 // Main listener for all messages.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -65,10 +60,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             })
             .then(result => sendResponse({ ok: true, response: result }))
             .catch(error => sendResponse({ ok: false, error: error.message }));
-        return true;
+        return true; // Essential for async fetch
     }
 
     if (msg.type === "SHOW_NOTIFICATION") {
+        console.log(`[DEBUG_LOG] Received SHOW_NOTIFICATION request with message: "${msg.payload.message}"`);
         chrome.notifications.create({
             type: "basic",
             iconUrl: "icons/icon128.png",
@@ -78,8 +74,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
     }
 
-    // =================== UPDATED SCHEDULER ===================
-    // This now logs the time and timezone when an alarm is set.
+    // Your correct scheduling logic is preserved here.
     if (msg.type === "SCHEDULE_ALARM") {
         const { hour, minute, enabled } = msg.payload;
         chrome.alarms.clear(ALARM_NAME, () => {
@@ -110,5 +105,4 @@ User Timezone: ${userTimezone}`);
         });
         return true; // async response
     }
-    // =============================================================
 });
