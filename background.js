@@ -53,4 +53,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             .catch(error => sendResponse({ ok: false, error: error.message }));
         return true; // Essential for async fetch
     }
+
+    if (msg.type === "SHOW_NOTIFICATION") {
+        chrome.notifications.create({
+            type: "basic",
+            iconUrl: "icons/icon128.png",
+            title: msg.payload.title || "e-Pracownik",
+            message: msg.payload.message || "An update occurred."
+        });
+        return;
+    }
 });

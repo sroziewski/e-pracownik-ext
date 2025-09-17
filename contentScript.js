@@ -137,22 +137,51 @@ async function clickButton() {
     }
 }
 
+// Replace the main() function in contentScript.js with this one
+
 async function main() {
     console.log(`[DEBUG_LOG] Main logic starting on: ${location.href}`);
-    await sleep(1000);
 
-    if (isOnHomePage()) {
-        await clickButton();
-    } else if (isOnLoginPage()) {
-        await performUILogin();
-    } else {
-        console.log("[DEBUG_LOG] Waiting for SPA redirect...");
-        await sleep(2000);
-        if (isOnLoginPage()) {
-            await performUILogin();
-        } else if(isOnHomePage()) {
-            await clickButton();
+    let resultMessage = "Process finished with no specific result.";
+    let wasSuccessful = false;
+
+    const isLoggedIn = await checkSessionStatus();
+
+    if (isLoggedIn) {
+        console.log("[DEBUG_LOG] Session is valid.");
+        if (isOnHomePage()) {
+            const result = await clickButton();
+            resultMessage = result.reason;
+            wasSuccessful = result.success;
+        } else {
+            console.log("[DEBUG_LOG] Logged in but not on home page. Navigating...");
+            window.location.href = TARGET_URL;
+            return; // Stop here, the script will run again on the new page
         }
+    } else {
+        console.log("[DEBUG_LOG] Session is invalid. Performing login.");
+        const loginSuccess = await performLogin();
+        if (loginSuccess) {
+            console.log("[DEBUG_LOG] Login successful. Requesting background script to navigate...");
+            chrome.runtime.sendMessage({ type: "LOGIN_SUCCESSFUL_PLEASE_NAVIGATE" });
+            return; // Stop here, the script will run again on the new page
+        } else {
+            resultMessage = "Login failed. Halting.";
+            wasSuccessful = false;
+            console.error(resultMessage);
+        }
+    }
+
+    // After all actions, check if we should send a notification
+    const { notify } = await chrome.storage.local.get("notify");
+    if (notify && wasSuccessful) {
+        chrome.runtime.sendMessage({
+            type: "SHOW_NOTIFICATION",
+            payload: {
+                title: "e-Pracownik",
+                message: resultMessage
+            }
+        });
     }
 }
 
