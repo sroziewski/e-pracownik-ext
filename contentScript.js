@@ -9,22 +9,22 @@ const selectors = {
         password: "input[name='passwordInput']",
         submit: "button[type='submit']"
     },
+    rcpCard: "app-rcp-card",
     presenceStatus: ".rcp-time-tracking-card-status-label--present",
-    // This is the direct selector for the button shown in your HTML
+    addButton: "button.add-button[mat-fab]",
+    contextMenu: "div.mat-mdc-menu-panel",
+    obecnoscMenuItem: "button.mat-mdc-menu-item",
     presenceButton: "div.smart-button.smart-button-add"
 };
+
 const textMatchers = {
-    // This is a reliable text fallback
-    markPresence: /rozpocznij/i
+    markPresence: /rozpocznij/i,
+    obecnosc: /^obecność$/i,
+    dzisiajLabel: /dzisiaj/i
 };
 
-function isOnLoginPage() {
-    return location.href.includes("/auth/login");
-}
-
-function isOnHomePage() {
-    return location.href.includes("/#/home");
-}
+function isOnLoginPage() { return location.href.includes("/auth/login"); }
+function isOnHomePage() { return location.href.includes("/#/home"); }
 
 async function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
 
@@ -42,7 +42,6 @@ async function waitForElement(selector, timeout = 8000) {
         if (element) return element;
         await sleep(250);
     }
-    console.error(`[DEBUG_LOG] Element not found after ${timeout}ms: ${selector}`);
     return null;
 }
 
@@ -51,6 +50,56 @@ function fillInput(element, value) {
     element.dispatchEvent(new Event('input', { bubbles: true }));
     element.dispatchEvent(new Event('change', { bubbles: true }));
 }
+
+
+// =================== MISSING FUNCTIONS RESTORED HERE ===================
+async function proxyFetch(url, options = {}) {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage({ type: 'PROXY_FETCH', payload: { url, options } }, response => {
+            if (chrome.runtime.lastError || !response) {
+                reject(new Error(chrome.runtime.lastError?.message || "Proxy fetch failed: No response."));
+            } else if (!response.ok) {
+                const err = new Error(response.error || `HTTP error! status: ${response.response?.status}`);
+                reject(err);
+            } else {
+                resolve(response.response);
+            }
+        });
+    });
+}
+
+async function checkSessionStatus() {
+    console.log("[DEBUG_LOG] Checking session status via API...");
+    try {
+        const res = await proxyFetch('https://e-pracownik.opi.org.pl:9901/api/calendar/configuration/schedule/default');
+        return res.status === 200;
+    } catch (e) {
+        console.error(`[DEBUG_LOG] Session check failed. ${e.message}`);
+        return false;
+    }
+}
+
+async function performLogin() {
+    console.log("[DEBUG_LOG] Attempting API login...");
+    const creds = await chrome.storage.local.get(["username", "password"]);
+    if (!creds.username) {
+        console.error("[DEBUG_LOG] Credentials not found in storage.");
+        return false;
+    }
+    try {
+        const res = await proxyFetch('https://e-pracownik.opi.org.pl:9901/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: creds.username, password: creds.password, provider: "ePracownik" })
+        });
+        return res.status === 200;
+    } catch (e) {
+        console.error("[DEBUG_LOG] API login failed.", e);
+        return false;
+    }
+}
+// =======================================================================
+
 
 async function performUILogin() {
     console.log("[DEBUG_LOG] Attempting UI-based login...");
@@ -78,108 +127,93 @@ async function performUILogin() {
     submitButton.click();
 }
 
+
 async function clickButton() {
-    console.log("[DEBUG_LOG] On home page. Waiting for dashboard content to render...");
-    // Wait for a known, stable element on the page before proceeding
-    const dzisiajLabel = await findByText(document.body, 'span', /dzisiaj/i);
+    console.log("[DEBUG_LOG] On home page. Waiting for dashboard content...");
+    const dzisiajLabel = await findByText(document.body, 'span', textMatchers.dzisiajLabel);
     if (!dzisiajLabel) {
-        console.error("[DEBUG_LOG] FAILURE: The 'Dzisiaj' label was not found. Dashboard may not have loaded.");
-        return;
+        return { success: false, reason: "Button not found (Dashboard did not load)." };
     }
 
-    console.log("[DEBUG_LOG] Dashboard content detected. Now looking for the button.");
-    await sleep(1000); // Short extra wait
-
-    if (document.querySelector(selectors.presenceStatus)) {
-        console.log("[DEBUG_LOG] SUCCESS: Already present.");
-        return;
+    const rcpCard = dzisiajLabel.closest('app-rcp-card');
+    if (!rcpCard) {
+        return { success: false, reason: "Button not found (RCP card missing)." };
     }
 
-    // Use the direct selector and the text-based fallback
-    let btn = document.querySelector(selectors.presenceButton) || findByText(document.body, 'div, span', textMatchers.markPresence);
+    console.log("[DEBUG_LOG] Dashboard content detected.");
 
+    if (rcpCard.querySelector(selectors.presenceStatus)) {
+        return { success: true, reason: "Presence Logged (Skipped - Already Present)." };
+    }
+
+    let btn = rcpCard.querySelector(selectors.presenceButton) || rcpCard.querySelector(selectors.addButton);
     if (!btn) {
-        console.error("[DEBUG_LOG] FAILURE: Presence button not found with any method.");
-        return;
+        return { success: false, reason: "Button not found (Could not find entry button)." };
     }
 
-    // Ensure we click the main container div
-    if (!btn.classList.contains('smart-button')) {
-        btn = btn.closest('.smart-button');
-    }
-
-    if (!btn) {
-        console.error("[DEBUG_LOG] FAILURE: Could not find parent .smart-button container to click.");
-        return;
-    }
-
-    console.log("[DEBUG_LOG] SUCCESS: Button found. Clicking now.", btn);
+    console.log("[DEBUG_LOG] Button found. Clicking.", btn);
     btn.click();
+    await sleep(500);
 
-    // After clicking, we might need to select from a dropdown if one appears
-    await sleep(500); // Wait for menu to potentially appear
-    const menuPanel = document.querySelector("div.mat-mdc-menu-panel");
-    if(menuPanel) {
-        console.log("[DEBUG_LOG] Menu panel detected. Looking for 'Obecność' menu item.");
-        const menuItem = findByText(menuPanel, 'button.mat-mdc-menu-item', /obecność/i);
-        if(menuItem) {
-            console.log("[DEBUG_LOG] Clicking 'Obecność' from menu.");
+    const menuPanel = document.querySelector(selectors.contextMenu);
+    if (menuPanel) {
+        console.log("[DEBUG_LOG] Menu detected. Clicking 'Obecność'.");
+        const menuItem = findByText(menuPanel, selectors.obecnoscMenuItem, textMatchers.obecnosc);
+        if (menuItem) {
             menuItem.click();
+        } else {
+            return { success: false, reason: "Button not found ('Obecność' missing from menu)." };
         }
     }
 
     await sleep(2000);
 
     if (document.querySelector(selectors.presenceStatus)) {
-        console.log("[DEBUG_LOG] SUCCESS: Presence confirmed after click.");
+        return { success: true, reason: "Presence Logged (Successfully marked)." };
     } else {
-        console.error("[DEBUG_LOG] FAILURE: Clicked button, but presence not confirmed.");
+        return { success: false, reason: "Action failed (Clicked but not confirmed)." };
     }
 }
 
-// Replace the main() function in contentScript.js with this one
 
 async function main() {
     console.log(`[DEBUG_LOG] Main logic starting on: ${location.href}`);
 
-    let resultMessage = "Process finished with no specific result.";
-    let wasSuccessful = false;
+    let finalStatus = { success: false, reason: "An unknown error occurred." };
 
-    const isLoggedIn = await checkSessionStatus();
-
-    if (isLoggedIn) {
-        console.log("[DEBUG_LOG] Session is valid.");
-        if (isOnHomePage()) {
-            const result = await clickButton();
-            resultMessage = result.reason;
-            wasSuccessful = result.success;
+    if (isOnHomePage()) {
+        const isLoggedIn = await checkSessionStatus();
+        if (isLoggedIn) {
+            finalStatus = await clickButton();
         } else {
-            console.log("[DEBUG_LOG] Logged in but not on home page. Navigating...");
-            window.location.href = TARGET_URL;
-            return; // Stop here, the script will run again on the new page
+            finalStatus = { success: false, reason: "Not logged in. Redirecting to login."};
+            await sleep(1000);
+            if(isOnHomePage()) {
+                window.location.href = "https://e-pracownik.opi.org.pl/#/auth/login";
+            }
         }
+    } else if (isOnLoginPage()) {
+        const loginSuccess = await performUILogin();
+        // This script will halt and re-run on the next page.
+        // No notification is sent from this branch.
+        return;
     } else {
-        console.log("[DEBUG_LOG] Session is invalid. Performing login.");
-        const loginSuccess = await performLogin();
-        if (loginSuccess) {
-            console.log("[DEBUG_LOG] Login successful. Requesting background script to navigate...");
-            chrome.runtime.sendMessage({ type: "LOGIN_SUCCESSFUL_PLEASE_NAVIGATE" });
-            return; // Stop here, the script will run again on the new page
-        } else {
-            resultMessage = "Login failed. Halting.";
-            wasSuccessful = false;
-            console.error(resultMessage);
+        await sleep(2000);
+        if (isOnHomePage() || isOnLoginPage()) {
+            main(); // Re-run the logic now that the URL is stable
         }
+        return;
     }
 
-    // After all actions, check if we should send a notification
+    // After all actions are complete, check the 'notify' preference and send a message
     const { notify } = await chrome.storage.local.get("notify");
-    if (notify && wasSuccessful) {
+    if (notify) {
+        console.log(`[DEBUG_LOG] Sending notification: ${finalStatus.reason}`);
         chrome.runtime.sendMessage({
             type: "SHOW_NOTIFICATION",
             payload: {
-                title: "e-Pracownik",
-                message: resultMessage
+                title: finalStatus.success ? "e-Pracownik Success" : "e-Pracownik Action Needed",
+                message: finalStatus.reason
             }
         });
     }
