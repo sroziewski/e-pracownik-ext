@@ -328,14 +328,12 @@ Authentication State: SUCCESS
 Timestamp: ${new Date().toISOString()}
 Next Auth Allowed After: ${new Date(lastAuthenticationAttempt + AUTHENTICATION_COOLDOWN).toISOString()}`);
       
-      // RELOAD the page to get the authenticated view.
-      // The content script will run again, but this time checkSessionStatus() will pass.
-      console.log(`[DEBUG_LOG] API login successful. Reloading page to enter authenticated state...`);
-      location.reload();
+      // Tell the background script to navigate to the home page.
+      console.log(`[DEBUG_LOG] API login successful. Requesting background to navigate to #/home...`);
+      chrome.runtime.sendMessage({ type: "NAVIGATE_TAB", url: "https://e-pracownik.opi.org.pl/#/home" });
       
-      // The script will halt here due to the reload. We wait indefinitely
-      // to prevent any further code in this context from running.
-      await new Promise(() => {}); 
+      // The script will halt here and wait for navigation.
+      await new Promise(() => {});
       return true;
     }
   } finally {

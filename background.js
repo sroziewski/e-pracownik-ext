@@ -105,33 +105,8 @@ Timestamp: ${new Date().toISOString()}`);
     });
   }
 
-  // Wait for the page to finish loading before messaging the content script
-  const onUpdated = (updatedTabId, info) => {
-    if (updatedTabId === tabId && info.status === "complete") {
-      chrome.tabs.onUpdated.removeListener(onUpdated);
-      chrome.tabs.sendMessage(tabId, { 
-        type: "CHECK_IN",
-        clickSessionId: clickSessionId,
-        processId: processId,
-        tabId: tabId // Send tab ID for potential cleanup
-      }).catch(error => {
-        console.log(`[DEBUG_LOG] Failed to send CHECK_IN message to tab ${tabId}: ${error.message}`);
-      });
-    }
-  };
-  chrome.tabs.onUpdated.addListener(onUpdated);
-
-  // Safety timeout: if load event missed, try after 15s
-  setTimeout(() => {
-    chrome.tabs.sendMessage(tabId, { 
-      type: "CHECK_IN",
-      clickSessionId: clickSessionId,
-      processId: processId,
-      tabId: tabId // Send tab ID for potential cleanup
-    }).catch(error => {
-      console.log(`[DEBUG_LOG] Failed to send CHECK_IN message to tab ${tabId} (timeout fallback): ${error.message}`);
-    });
-  }, 15000);
+  // The temporary onUpdated listener and setTimeout that were here have been removed.
+  // A new global, persistent listener at the end of the file now handles this logic robustly.
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -347,6 +322,16 @@ Action: Initiating openTargetAndRunCheck with session tracking`);
     });
   }
   
+  // NEW: Handle navigation requests from content scripts
+  if (msg?.type === "NAVIGATE_TAB") {
+    if (_sender.tab && _sender.tab.id && msg.url) {
+      console.log(`[DEBUG_LOG] Received NAVIGATE_TAB request for tab ${_sender.tab.id} to URL ${msg.url}`);
+      chrome.tabs.update(_sender.tab.id, { url: msg.url });
+      // No response needed, this is a fire-and-forget action.
+    }
+    return; // No async response.
+  }
+  
   if (msg?.type === "LOGIN_SUCCESS_COOKIE") {
     // Find associated click session for correlation
     let correlatedSession = null;
@@ -542,5 +527,41 @@ Timestamp: ${new Date().toISOString()}`);
       sendResponse({ ok: true });
     });
     return true; // async response
+  }
+});
+
+// NEW: Global, persistent listener for tab updates.
+// This is more robust than the previous temporary listener.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // Ensure the tab has finished loading and has a URL before proceeding.
+  if (changeInfo.status === 'complete' && tab.url && tab.url.startsWith('https://e-pracownik.opi.org.pl/')) {
+    
+    // Check if this tab is part of a presence-check session we are currently managing.
+    let correlatedSession = null;
+    let clickSessionId = null;
+
+    for (const [sessionId, sessionData] of activeClickSessions.entries()) {
+      if (sessionData.tabId === tabId && sessionData.status === 'PROCESSING') {
+        correlatedSession = sessionData;
+        clickSessionId = sessionId;
+        break;
+      }
+    }
+
+    // If we found a matching session, it means this tab just finished loading
+    // (either the login page or the home page) and needs to be processed.
+    if (correlatedSession) {
+      console.log(`[DEBUG_LOG] Monitored tab ${tabId} finished loading URL: ${tab.url}. Sending CHECK_IN message.`);
+      
+      chrome.tabs.sendMessage(tabId, {
+        type: "CHECK_IN",
+        clickSessionId: clickSessionId,
+        processId: correlatedSession.processId,
+        tabId: tabId
+      }).catch(error => {
+        // This can happen if the content script isn't ready, which is normal on some navigations.
+        console.log(`[DEBUG_LOG] Suppressing benign error on sending CHECK_IN to tab ${tabId}: ${error.message}`);
+      });
+    }
   }
 });
