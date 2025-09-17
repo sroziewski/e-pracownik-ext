@@ -51,7 +51,6 @@ function fillInput(element, value) {
     element.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
-
 async function proxyFetch(url, options = {}) {
     return new Promise((resolve, reject) => {
         chrome.runtime.sendMessage({ type: 'PROXY_FETCH', payload: { url, options } }, response => {
@@ -82,7 +81,7 @@ async function performUILogin() {
     console.log("[DEBUG_LOG] Attempting UI-based login...");
     const creds = await chrome.storage.local.get(["username", "password"]);
     if (!creds.username || !creds.password) {
-        console.error("[DEBUG_LOG] Credentials not found in storage. Halting.");
+        console.error("[DEBUG_LOG] Credentials not found. Halting.");
         return false;
     }
 
@@ -105,7 +104,6 @@ async function performUILogin() {
     return true;
 }
 
-
 async function clickButton() {
     console.log("[DEBUG_LOG] On home page. Waiting for dashboard content...");
     const dzisiajLabel = await findByText(document.body, 'span', textMatchers.dzisiajLabel);
@@ -126,14 +124,9 @@ async function clickButton() {
 
     let btn = rcpCard.querySelector(selectors.presenceButton) || rcpCard.querySelector(selectors.addButton);
 
-    // =================== THE ONLY CHANGE IS HERE ===================
     if (!btn) {
-        // If the button is not found, we now treat this as a success condition.
-        // The most likely reason is that it's a weekend, holiday, or after hours.
-        console.log("[DEBUG_LOG] SUCCESS: Presence button not found. Assuming no action is needed today.");
         return { success: true, reason: "Presence Login Skipped (Button not present)." };
     }
-    // =============================================================
 
     console.log("[DEBUG_LOG] Button found. Clicking.", btn);
     btn.click();
@@ -159,7 +152,7 @@ async function clickButton() {
     }
 }
 
-
+// =================== CORRECTED MAIN FUNCTION ===================
 async function main() {
     console.log(`[DEBUG_LOG] Main logic starting on: ${location.href}`);
 
@@ -179,20 +172,22 @@ async function main() {
         console.log("[DEBUG_LOG] Session is invalid.");
         if (isOnLoginPage()) {
             const loginSuccess = await performUILogin();
-            if (!loginSuccess) {
-                finalStatus = { success: false, reason: "Login failed. Halting." };
-            } else {
-                return;
-            }
+            // We stop here. The page will navigate, and the script will run again.
+            // No notification is needed at this exact moment.
+            return;
         } else {
-            finalStatus = { success: false, reason: "Not logged in and not on login page. Redirecting..."};
+            // This happens if we are logged out and on a strange URL.
+            finalStatus = { success: false, reason: "Not logged in. Redirecting to login page."};
             window.location.href = "https://e-pracownik.opi.org.pl/#/auth/login";
+            // We return here to let the navigation happen. A notification will be triggered on the next page load if needed.
             return;
         }
     }
 
+    // After all actions are complete, check if we should send a notification
     const { notify } = await chrome.storage.local.get("notify");
     if (notify) {
+        // This is the key fix: We send a notification REGARDLESS of success or failure.
         console.log(`[DEBUG_LOG] Sending notification: ${finalStatus.reason}`);
         chrome.runtime.sendMessage({
             type: "SHOW_NOTIFICATION",
@@ -203,5 +198,6 @@ async function main() {
         });
     }
 }
+// =============================================================
 
 main();
