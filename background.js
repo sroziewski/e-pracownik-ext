@@ -572,17 +572,20 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     // If we found a matching session, it means this tab just finished loading
     // (either the login page or the home page) and needs to be processed.
     if (correlatedSession) {
-      console.log(`[DEBUG_LOG] Monitored tab ${tabId} finished loading URL: ${tab.url}. Sending CHECK_IN message.`);
+      console.log(`[DEBUG_LOG] Monitored tab ${tabId} finished loading URL: ${tab.url}. Waiting for SPA router to settle...`);
       
-      chrome.tabs.sendMessage(tabId, {
-        type: "CHECK_IN",
-        clickSessionId: clickSessionId,
-        processId: correlatedSession.processId,
-        tabId: tabId
-      }).catch(error => {
-        // This can happen if the content script isn't ready, which is normal on some navigations.
-        console.log(`[DEBUG_LOG] Suppressing benign error on sending CHECK_IN to tab ${tabId}: ${error.message}`);
-      });
+      // Add a delay to allow the SPA's router to finish any internal navigation.
+      setTimeout(() => {
+        console.log(`[DEBUG_LOG] Delay finished. Sending CHECK_IN message to tab ${tabId}.`);
+        chrome.tabs.sendMessage(tabId, {
+          type: "CHECK_IN",
+          clickSessionId: clickSessionId,
+          processId: correlatedSession.processId,
+          tabId: tabId
+        }).catch(error => {
+          console.log(`[DEBUG_LOG] Suppressing benign error on sending CHECK_IN to tab ${tabId}: ${error.message}`);
+        });
+      }, 1500); // 1.5-second delay should be sufficient.
     }
   }
 });

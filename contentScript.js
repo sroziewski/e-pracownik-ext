@@ -446,8 +446,8 @@ async function clickPresenceButtonIfNeeded() {
     }
   }
 
-  // Wait for confirmation UI/state change
-  for (let i = 0; i < 20; i++) {
+  // Wait for confirmation UI/state change - Increased timeout from 10s to 20s
+  for (let i = 0; i < 40; i++) {
     await sleep(500);
     if (alreadyPresent()) {
       return { changed: true, reason: "Presence set" };
