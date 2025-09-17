@@ -3,15 +3,27 @@ const TARGET_URL = "https://e-pracownik.opi.org.pl/#/home";
 
 console.log(`[DEBUG_LOG] Content script loaded. URL: ${location.href}`);
 
+// =================== CORRECTED SELECTORS BASED ON YOUR HTML ===================
 const selectors = {
-    presenceStatus: ".rcp-time-tracking-card-status-label--present, [class*='-present']",
+    login: {
+        username: "input[name='loginInput']", // Using the correct 'name' attribute
+        password: "input[name='passwordInput']", // Using the correct 'name' attribute
+        submit: "button[type='submit']"
+    },
+    presenceStatus: ".rcp-time-tracking-card-status-label--present",
     presenceButton: ".smart-button.smart-button-add"
 };
+// ============================================================================
+
 const textMatchers = {
     markPresence: /rozpocznij/i
 };
 
-function isOnTargetPage() {
+function isOnLoginPage() {
+    return location.href.includes("/auth/login");
+}
+
+function isOnHomePage() {
     return location.href.includes("/#/home");
 }
 
@@ -24,50 +36,51 @@ function findByText(root, selector, regex) {
     return null;
 }
 
-async function proxyFetch(url, options = {}) {
-    return new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ type: 'PROXY_FETCH', payload: { url, options } }, response => {
-            if (chrome.runtime.lastError || !response) {
-                reject(new Error(chrome.runtime.lastError?.message || "Proxy fetch failed: No response."));
-            } else if (!response.ok) {
-                const err = new Error(response.error || `HTTP error! status: ${response.response?.status}`);
-                reject(err);
-            } else {
-                resolve(response.response);
-            }
-        });
-    });
-}
-
-async function checkSessionStatus() {
-    console.log("[DEBUG_LOG] Checking session status via API...");
-    try {
-        const res = await proxyFetch('https://e-pracownik.opi.org.pl:9901/api/calendar/configuration/schedule/default');
-        return res.status === 200;
-    } catch (e) {
-        console.error(`[DEBUG_LOG] Session check failed. ${e.message}`);
-        return false;
+// A helper function to robustly wait for an element to appear in the DOM
+async function waitForElement(selector, timeout = 5000) {
+    const startTime = Date.now();
+    while (Date.now() - startTime < timeout) {
+        const element = document.querySelector(selector);
+        if (element) return element;
+        await sleep(200);
     }
+    return null; // Return null if the element is not found within the timeout
 }
 
-async function performLogin() {
-    console.log("[DEBUG_LOG] Attempting API login...");
+
+// Function to fill an input field and trigger Angular's change detection
+function fillInput(element, value) {
+    element.value = value;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+async function performUILogin() {
+    console.log("[DEBUG_LOG] Attempting UI-based login...");
     const creds = await chrome.storage.local.get(["username", "password"]);
-    if (!creds.username) {
-        console.error("[DEBUG_LOG] Credentials not found in storage.");
-        return false;
+    if (!creds.username || !creds.password) {
+        console.error("[DEBUG_LOG] Credentials not found in storage. Halting.");
+        return;
     }
-    try {
-        const res = await proxyFetch('https://e-pracownik.opi.org.pl:9901/api/auth/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: creds.username, password: creds.password, provider: "ePracownik" })
-        });
-        return res.status === 200;
-    } catch (e) {
-        console.error("[DEBUG_LOG] API login failed.", e);
-        return false;
+
+    // Use the robust waitForElement function to find the form fields
+    const usernameField = await waitForElement(selectors.login.username);
+    const passwordField = await waitForElement(selectors.login.password);
+    const submitButton = await waitForElement(selectors.login.submit);
+
+    if (!usernameField || !passwordField || !submitButton) {
+        console.error("[DEBUG_LOG] Login form fields not found even after waiting. Halting. Please check selectors.");
+        return;
     }
+
+    console.log("[DEBUG_LOG] Login form fields found. Filling form...");
+    fillInput(usernameField, creds.username);
+    fillInput(passwordField, creds.password);
+
+    await sleep(500);
+
+    console.log("[DEBUG_LOG] Clicking submit button.");
+    submitButton.click();
 }
 
 async function clickButton() {
@@ -106,31 +119,27 @@ async function capturePageContent() {
 
 async function main() {
     console.log(`[DEBUG_LOG] Main logic starting on: ${location.href}`);
-    const isLoggedIn = await checkSessionStatus();
+    await sleep(1000);
 
-    if (isLoggedIn) {
-        console.log("[DEBUG_LOG] Session is valid.");
-        if (isOnTargetPage()) {
-            await clickButton();
-        } else {
-            console.log("[DEBUG_LOG] Logged in but not on home page. Navigating...");
-            window.location.href = TARGET_URL;
-        }
+    if (isOnHomePage()) {
+        console.log("[DEBUG_LOG] Detected we are on the home page.");
+        await clickButton();
+    } else if (isOnLoginPage()) {
+        console.log("[DEBUG_LOG] Detected we are on the login page.");
+        await performUILogin();
     } else {
-        console.log("[DEBUG_LOG] Session is invalid. Performing login.");
-        const loginSuccess = await performLogin();
-        if (loginSuccess) {
-            // =================== THE ONLY CHANGE IS HERE ===================
-            console.log("[DEBUG_LOG] Login successful. Waiting a moment before reloading...");
-            // This brief pause is critical. It gives the browser time to save the cookie.
-            await sleep(500);
-            location.reload();
-            // =============================================================
-        } else {
-            console.error("[DEBUG_LOG] Login failed. Halting.");
+        // This case handles when the script loads before the SPA redirects to /#/auth/login
+        console.log("[DEBUG_LOG] Not on a recognized page yet, waiting for SPA redirect...");
+        await sleep(2000); // Wait for the redirect
+        if (isOnLoginPage()) {
+            console.log("[DEBUG_LOG] Redirect to login page detected.");
+            await performUILogin();
+        } else if(isOnHomePage()) {
+            console.log("[DEBUG_LOG] Redirect to home page detected (already logged in).");
+            await clickButton();
         }
     }
 }
 
-// This wrapper ensures the script runs only once the page is fully loaded
-window.addEventListener('load', main);
+// Start the process directly.
+main();

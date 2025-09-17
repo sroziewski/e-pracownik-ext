@@ -3,7 +3,7 @@ const TARGET_URL = "https://e-pracownik.opi.org.pl/#/home";
 
 console.log(`[DEBUG_LOG] Extension loaded at ${new Date().toISOString()}`);
 
-// This function contains the logic to open or focus the tab.
+// This function opens or focuses the tab.
 async function startOrFocusTab() {
     console.log("[DEBUG_LOG] Executing startOrFocusTab.");
     try {
@@ -22,6 +22,7 @@ async function startOrFocusTab() {
 
 // Main listener for all messages.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // From popup.js
     if (msg.type === "RUN_CHECK_NOW") {
         console.log("[DEBUG_LOG] RUN_CHECK_NOW message received from popup.");
         startOrFocusTab();
@@ -29,10 +30,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
     }
 
+    // From contentScript.js, after a successful login
+    if (msg.type === "LOGIN_SUCCESSFUL") {
+        console.log(`[DEBUG_LOG] Received LOGIN_SUCCESSFUL from tab ${sender.tab.id}. Forcing navigation to home.`);
+        // Use the authoritative tabs API to navigate the tab. This will break the loop.
+        chrome.tabs.update(sender.tab.id, { url: TARGET_URL });
+        return;
+    }
+
+    // From contentScript.js, to make API calls
     if (msg.type === "PROXY_FETCH") {
         fetch(msg.payload.url, msg.payload.options)
             .then(response => {
-                if (!response.ok) { throw new Error(`HTTP error! status: ${response.status}`); }
+                // We need to handle non-ok responses so the content script knows about them.
+                if (!response.ok) {
+                    // Don't throw an error, just pass the status along
+                    return { status: response.status, data: null };
+                }
                 return response.text().then(text => ({ status: response.status, data: text }));
             })
             .then(result => sendResponse({ ok: true, response: result }))
