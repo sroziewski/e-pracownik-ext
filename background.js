@@ -322,6 +322,28 @@ Action: Initiating openTargetAndRunCheck with session tracking`);
     });
   }
   
+  // NEW: Handle navigation requests from content scripts
+  if (msg?.type === "NAVIGATE_TAB") {
+    if (_sender.tab && _sender.tab.id && msg.url) {
+      console.log(`[DEBUG_LOG] Received NAVIGATE_TAB request for tab ${_sender.tab.id} to URL ${msg.url}`);
+      
+      // Find the session and update its state to prepare for the next page load.
+      for (const [sessionId, sessionData] of activeClickSessions.entries()) {
+        if (sessionData.tabId === _sender.tab.id && (sessionData.status === 'PROCESSING' || sessionData.status === 'CHECK_IN_SENT')) {
+          activeClickSessions.set(sessionId, {
+            ...sessionData,
+            status: 'AWAITING_HOME_LOAD'
+          });
+          console.log(`[DEBUG_LOG] Session ${sessionId} state changed to AWAITING_HOME_LOAD.`);
+          break;
+        }
+      }
+      
+      chrome.tabs.update(_sender.tab.id, { url: msg.url });
+    }
+    return; // No async response.
+  }
+  
   if (msg?.type === "LOGIN_SUCCESS_COOKIE") {
     // Find associated click session for correlation
     let correlatedSession = null;
