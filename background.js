@@ -2,6 +2,9 @@
 const TARGET_URL = "https://e-pracownik.opi.org.pl/#/home";
 const ALARM_NAME = "autoCheckPresence";
 
+// A map to keep track of automatic cleanup timers for each tab
+const tabCleanupTimers = new Map();
+
 console.log(`[DEBUG_LOG] Extension loaded at ${new Date().toISOString()}`);
 
 // This function opens or focuses the tab.
@@ -14,12 +17,46 @@ async function startOrFocusTab() {
             await chrome.tabs.update(tabs[0].id, { url: TARGET_URL, active: true });
         } else {
             console.log("[DEBUG_LOG] No existing tab found. Creating a new one.");
-            await chrome.tabs.create({ url: TARGET_URL });
+            const newTab = await chrome.tabs.create({ url: TARGET_URL });
+
+            const tabId = newTab.id;
+            console.log(`[DEBUG_LOG] Scheduling automatic cleanup for tab ${tabId} in 30 seconds.`);
+
+            const timerId = setTimeout(() => {
+                chrome.tabs.get(tabId, (tab) => {
+                    if (chrome.runtime.lastError) {
+                        console.log(`[DEBUG_LOG] Auto-cleanup for tab ${tabId} skipped: Tab already closed.`);
+                    } else if (tab) {
+
+                        // =================== NEW NOTIFICATION LOGIC STARTS HERE ===================
+                        console.log(`[DEBUG_LOG] Auto-cleanup: Sending notification and closing tab ${tabId}.`);
+
+                        // 1. Create the notification to inform the user.
+                        chrome.notifications.create({
+                            type: "basic",
+                            iconUrl: "icons/icon128.png",
+                            title: "e-Pracownik Cleanup",
+                            message: "Closing e-Pracownik tab after 30-second timeout."
+                        }, () => {
+                            // 2. Use the callback to close the tab a moment after the notification is sent.
+                            // This small delay helps ensure the user sees the notification.
+                            setTimeout(() => {
+                                chrome.tabs.remove(tabId);
+                            }, 500); // 0.5 second delay
+                        });
+                        // =================== NEW NOTIFICATION LOGIC ENDS HERE ===================
+                    }
+                    tabCleanupTimers.delete(tabId);
+                });
+            }, 30000);
+
+            tabCleanupTimers.set(tabId, timerId);
         }
     } catch (error) {
         console.error("[DEBUG_LOG] Error in startOrFocusTab:", error);
     }
 }
+
 
 // Handles when the scheduled alarm fires.
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -60,7 +97,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             })
             .then(result => sendResponse({ ok: true, response: result }))
             .catch(error => sendResponse({ ok: false, error: error.message }));
-        return true; // Essential for async fetch
+        return true;
     }
 
     if (msg.type === "SHOW_NOTIFICATION") {
@@ -74,7 +111,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
     }
 
-    // Your correct scheduling logic is preserved here.
     if (msg.type === "SCHEDULE_ALARM") {
         const { hour, minute, enabled } = msg.payload;
         chrome.alarms.clear(ALARM_NAME, () => {
@@ -96,13 +132,13 @@ User Timezone: ${userTimezone}`);
 
                 chrome.alarms.create(ALARM_NAME, {
                     when: next.getTime(),
-                    periodInMinutes: 24 * 60 // Daily
+                    periodInMinutes: 24 * 60
                 });
             } else {
                 console.log("[DEBUG_LOG] Alarm disabled and cleared.");
             }
             sendResponse({ ok: true });
         });
-        return true; // async response
+        return true;
     }
 });
