@@ -328,11 +328,11 @@ Authentication State: SUCCESS
 Timestamp: ${new Date().toISOString()}
 Next Auth Allowed After: ${new Date(lastAuthenticationAttempt + AUTHENTICATION_COOLDOWN).toISOString()}`);
       
-      // Tell the background script to navigate to the home page.
-      console.log(`[DEBUG_LOG] API login successful. Requesting background to navigate to #/home...`);
-      chrome.runtime.sendMessage({ type: "NAVIGATE_TAB", url: "https://e-pracownik.opi.org.pl/#/home" });
+      // RELOAD the page to get the authenticated view. This is more reliable for SPAs.
+      console.log(`[DEBUG_LOG] API login successful. Reloading page to enter authenticated state...`);
+      location.reload();
       
-      // The script will halt here and wait for navigation.
+      // The script will halt here due to the reload.
       await new Promise(() => {});
       return true;
     }
